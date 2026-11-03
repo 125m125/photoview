@@ -215,6 +215,136 @@ Possible ways of securing a self-hosted service might be (but not limited to):
 
 Setting up and configuring of all these protections depends on and requires a lot of info about your local network and self-hosted services. Based on this info, the configuration flow and resulting services architecture might differ a lot between cases. That is why in the scope of this project, we can only provide you with this high-level list of possible ways of webservice protection. You'll need to investigate them, find the best combination and configuration for your case, and take responsibility to configure everything in the correct and consistent way. We cannot provide you support for such highly secured setups, as a lot of things might work differently because of security limitations.
 
+### GPX tracks
+
+Copy finalized `.gpx` files into your photo directories and run a normal scan.
+Extensions are case-insensitive. Tracks appear alongside photos in their containing
+albums, with a static map thumbnail and a full-size map in the existing image
+viewer. Use **Download → Original** to download the unchanged GPX file with its
+original filename. Album original downloads include GPX files too. The same album,
+user, and sharing permissions apply to tracks and their previews. Sharing an album
+also shares its GPX tracks, including original GPS recordings.
+
+#### Background map configuration
+
+> **Check your map provider's terms before enabling GPX previews.** Not all
+> providers permit server-side tile stitching, drawing overlays, permanent storage,
+> or redistribution of generated map images. Users of this fork must verify that
+> their chosen service and plan permit all of these operations, including sharing
+> and downloading cached previews. An API key or a free request allowance alone
+> does not grant these rights.
+
+Configure the following environment variables on the Photoview service (for
+Docker Compose, add them under the service's `environment` section):
+
+```yaml
+PHOTOVIEW_GPX_TILE_URL: 'https://your-tile-service.example/{z}/{x}/{y}.png?key=YOUR_SERVER_KEY'
+PHOTOVIEW_GPX_ATTRIBUTION: '© Your map provider | © OpenStreetMap contributors https://www.openstreetmap.org/copyright'
+PHOTOVIEW_GPX_TILE_MAX_ZOOM: '16'
+```
+
+Use a provider that supplies **256 × 256 PNG or JPEG XYZ raster tiles in Web
+Mercator (EPSG:3857)**. Replace the URL, credentials, and attribution with those
+required by that provider and map style. A self-hosted tile service can be used
+without API credentials. The URL must contain `{z}`, `{x}`, and `{y}`; TMS Y
+coordinates, vector tiles, 512-pixel tiles, and redirects are not supported. Use
+the provider's final endpoint directly. Maximum zoom is optional (default `16`,
+range `0`–`22`); set it to the service's supported maximum. Use HTTPS for external
+services and keep API keys in server configuration.
+
+Photoview draws the configured plain-text attribution automatically into a
+readable footer in both previews and thumbnails. Include every required provider
+and data-source credit and copyright URL in this setting. No manual editing of
+preview images is needed. Providers requiring a logo, an interactive attribution
+control, or clickable links beyond the printed credits are not supported by this
+initial renderer unless they explicitly permit this static-image attribution.
+Local installations need ImageMagick with FreeType and `fonts-dejavu-core`; the
+container dependency scripts include these requirements. The main Dockerfile uses
+an already-built `photoview/dependencies:trixie` image: an application build alone
+does not rebuild ImageMagick. Builders using an older dependency image without
+FreeType must rebuild the dependency image from `dependencies/Dockerfile` and
+use that image in the application's dependency stage. Installing the font package
+alone cannot add a missing ImageMagick delegate.
+
+There is deliberately no default external tile server. For a hosted alternative
+to Mapbox, [Geoapify](https://www.geoapify.com/pricing/) offers a free plan without
+a credit card; verify its current [terms](https://www.geoapify.com/terms-and-conditions/)
+and [style-specific attribution](https://apidocs.geoapify.com/docs/maps/) for this
+use before configuring it. This renderer supports plain-text credits, so check
+any free-plan hyperlink requirements with the provider. Do not assume public
+OpenStreetMap tile servers are unrestricted; their
+[tile usage policy](https://operations.osmfoundation.org/policies/tiles/) applies.
+
+For the standard OpenStreetMap endpoint, use exactly
+`PHOTOVIEW_GPX_TILE_URL=https://tile.openstreetmap.org/{z}/{x}/{y}.png` (HTTPS,
+no alternate subdomain or query string). No key is needed. Photoview automatically
+sets the attribution to `© OpenStreetMap contributors` with the copyright URL;
+`PHOTOVIEW_GPX_ATTRIBUTION` is not required for this endpoint.
+
+**This does not make scan-time rendering compliant with the public OSM tile
+service's policy:** its prefetch/offline restriction includes background jobs
+fetching tiles that nobody is currently viewing, even for a small number of
+tracks. Obtain permission or choose a service that permits this workflow. OSM is
+an explicit configuration option, never a default or an automatic fallback.
+
+Tile requests identify this fork as
+`Photoview-GPX/1.0 (+https://github.com/125m125/photoview)`. Operators can set
+`PHOTOVIEW_GPX_USER_AGENT` to include their own contact URL or email, for example
+`Photoview-GPX/1.0 (+https://photos.example/contact)`. Keep the application name
+and identity stable; do not impersonate browsers or use generic library names.
+Requests originate in the scanner, not the browser, so there is no browser
+Referer to forward and no album URL is disclosed to the tile service.
+
+For the standard OSM endpoint, raw tiles are cached privately under
+`PHOTOVIEW_MEDIA_CACHE/gpx-tiles/osm-http` across tracks and scans, using
+[bartventer/httpcache](https://github.com/bartventer/httpcache)'s filesystem-backed
+HTTP transport. The transport handles HTTP expiry and conditional revalidation;
+Photoview does not maintain a separate tile freshness/validator database. When
+neither Cache-Control nor Expires is supplied, a small wrapper supplies OSM's
+seven-day fallback. It also validates tiles before they enter the cache and
+normalizes repeated Cache-Control fields and max-age precedence. Stale tiles are
+revalidated synchronously; uncacheable 304 updates fail rather than being stored.
+Requests do not
+send cache-bypass headers;
+OSM requests from concurrent scans are serialized. This provider cache does not
+change the existing lifetime or invalidation behavior of finished GPX previews.
+It is not enabled for other providers; their individual terms may differ.
+
+The existing `MAPBOX_TOKEN` setting is for Photoview's interactive Places/photo
+maps and is exposed to browsers. GPX does **not** reuse or require it. In
+particular, [Mapbox's static-map guidance](https://www.mapbox.com/static-maps)
+limits caching of static API images to client devices for up to 30 days; that is
+not a suitable default for Photoview's permanent server-side preview cache.
+
+GPX parsing and track drawing happen locally during scanning. The provider only
+receives background tile coordinates, which reveal the approximate map area,
+never the full trace, timestamps, or GPX file. A preview needs at most 20 tile
+requests, issued sequentially, with no automatic retries, a five-second timeout
+per request, and a 30-second deadline for background fetching. Tiles are reused within
+one render; the finished preview and normal thumbnail are cached afterwards. The
+standard OSM endpoint additionally uses the provider tile cache described above.
+Provider URLs and credentials are not included in preview metadata, frontend
+configuration, or provider-error messages.
+
+#### Initial limitations
+
+- Tracks and track segments are supported, with separate start/end markers and
+  padding around the complete track. Invalid coordinates break a segment; malformed
+  files and files without valid track points produce scan errors without a preview.
+  Waypoints and routes without tracks are not rendered. Latitudes outside Web
+  Mercator's coverage are clamped to its approximately ±85.05° limit, and longitude
+  bounds wrap across the antimeridian.
+- Map previews are static. There are no interactive controls, Places integration,
+  photo geotagging, editing, or web uploads for GPX files.
+- Files are assumed finalized when discovered. Existing previews are reused using
+  Photoview's normal cache behavior; changing a GPX file, tile style, provider, or
+  attribution does not automatically refresh them. No file fingerprinting or new
+  change-detection mechanism is added.
+- Missing configuration or a provider error leaves the item without a usable
+  preview until a successful rescan. Correct the configuration and scan again.
+  Scans regenerate missing previews and thumbnails. A missing GPX preview requested
+  through HTTP returns 404 until rescanned, keeping map composition out of requests.
+
 ### Hardware Acceleration
 
 You can run FFmpeg with hardware-acceleration–capable codecs by defining `PHOTOVIEW_VIDEO_HARDWARE_ACCELERATION` in your

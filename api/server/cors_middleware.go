@@ -88,7 +88,7 @@ func handleCORS(corsEnabled bool, w http.ResponseWriter) http.ResponseWriter {
 	if corsEnabled {
 		methods := []string{http.MethodGet, http.MethodPost, http.MethodOptions}
 		requestHeaders := []string{"authorization", "content-type", "content-length", "TokenPassword"}
-		responseHeaders := []string{"content-length"}
+		responseHeaders := []string{"content-length", "content-disposition"}
 
 		w.Header().Set("Access-Control-Allow-Methods", strings.Join(methods, ", "))
 		w.Header().Set("Access-Control-Allow-Headers", strings.Join(requestHeaders, ", "))

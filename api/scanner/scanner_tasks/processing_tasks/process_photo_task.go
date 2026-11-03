@@ -7,6 +7,7 @@ import (
 	"github.com/photoview/photoview/api/graphql/models"
 	"github.com/photoview/photoview/api/log"
 	"github.com/photoview/photoview/api/scanner/media_encoding"
+	"github.com/photoview/photoview/api/scanner/media_type"
 	"github.com/photoview/photoview/api/scanner/scanner_task"
 	"github.com/pkg/errors"
 )
@@ -74,7 +75,7 @@ func (t ProcessPhotoTask) ProcessMedia(ctx scanner_task.TaskContext, mediaData *
 			log.Info(ctx, "High-res photo found in database but not in cache, re-encoding photo to cache", "media_name", highResURL.MediaName)
 			updatedURLs = append(updatedURLs, highResURL)
 
-			err = mediaData.EncodeHighRes(baseImagePath)
+			err = mediaData.EncodeHighRes(ctx, baseImagePath)
 			if err != nil {
 				return []*models.MediaURL{}, errors.Wrap(err, "creating high-res cached image")
 			}
@@ -85,7 +86,12 @@ func (t ProcessPhotoTask) ProcessMedia(ctx scanner_task.TaskContext, mediaData *
 	if origURL == nil {
 
 		// Make sure photo dimensions is set
-		photoDimensions, err := media_encoding.GetPhotoDimensions(photo.Path)
+		dimensionPath := photo.Path
+		// GPX originals are XML; dimensions belong to their generated map preview.
+		if media_type.IsGPX(photo.Path) {
+			dimensionPath = baseImagePath
+		}
+		photoDimensions, err := media_encoding.GetPhotoDimensions(dimensionPath)
 		if err != nil {
 			return []*models.MediaURL{}, err
 		}

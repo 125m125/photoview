@@ -46,6 +46,14 @@ const (
 	EnvVideoHardwareAcceleration EnvironmentVariable = "PHOTOVIEW_VIDEO_HARDWARE_ACCELERATION"
 )
 
+// GPX static previews. These are server-only; do not expose tile credentials via GraphQL.
+const (
+	EnvGPXTileURL     EnvironmentVariable = "PHOTOVIEW_GPX_TILE_URL"
+	EnvGPXAttribution EnvironmentVariable = "PHOTOVIEW_GPX_ATTRIBUTION"
+	EnvGPXTileMaxZoom EnvironmentVariable = "PHOTOVIEW_GPX_TILE_MAX_ZOOM"
+	EnvGPXUserAgent   EnvironmentVariable = "PHOTOVIEW_GPX_USER_AGENT"
+)
+
 // GetName returns the name of the environment variable itself
 func (v EnvironmentVariable) GetName() string {
 	return string(v)
