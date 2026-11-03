@@ -25,6 +25,7 @@ apt-get install -y --no-install-recommends \
   "libbz2-dev:${DEB_HOST_ARCH}" \
   "libdjvulibre-dev:${DEB_HOST_ARCH}" \
   "libfftw3-dev:${DEB_HOST_ARCH}" \
+  "libfreetype6-dev:${DEB_HOST_ARCH}" \
   "libheif-dev:${DEB_HOST_ARCH}" \
   "libjbig-dev:${DEB_HOST_ARCH}" \
   "libjpeg62-turbo-dev:${DEB_HOST_ARCH}" \
@@ -58,6 +59,7 @@ FEATURES=(
   --with-heic
   --with-jbig
   --with-jpeg
+  --with-freetype
   --with-jxl
   --with-lcms
   --with-lzma

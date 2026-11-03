@@ -1,3 +1,4 @@
+import { downloadFilename } from '../../helpers/downloadFilename'
 import { gql, useLazyQuery } from '@apollo/client'
 import { useTranslation } from 'react-i18next'
 import { NotificationType } from '../../__generated__/globalTypes'
@@ -85,14 +86,10 @@ const downloadMedia = (t: TranslationFn) => async (url: string) => {
     return
   }
 
-  const filenameMatch = url.match(/[^/]*$/)
-
-  if (filenameMatch == null) {
-    console.error('Could not extract filename', url)
-    return
-  }
-
-  const filename = filenameMatch[0]
+  const filename = downloadFilename(
+    response.headers.get('Content-Disposition'),
+    url
+  )
   downloadBlob(blob, filename)
 }
 

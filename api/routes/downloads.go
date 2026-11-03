@@ -4,10 +4,12 @@ import (
 	"archive/zip"
 	"errors"
 	"fmt"
+	"github.com/photoview/photoview/api/scanner/media_type"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -78,7 +80,11 @@ func RegisterDownloadRoutes(db *gorm.DB, router *mux.Router) {
 		zipWriter := zip.NewWriter(w)
 
 		for _, media := range mediaURLs {
-			zipFile, err := zipWriter.Create(fmt.Sprintf("%s/%s", album.Title, media.MediaName))
+			filename := media.MediaName
+			if media.Purpose == models.MediaOriginal && media_type.IsGPX(media.Media.Path) {
+				filename = filepath.Base(media.Media.Path)
+			}
+			zipFile, err := zipWriter.Create(fmt.Sprintf("%s/%s", album.Title, filename))
 			if err != nil {
 				log.Printf("ERROR: Failed to create a file in zip, when downloading album (%d): %v\n", album.ID, err)
 				w.WriteHeader(http.StatusInternalServerError)

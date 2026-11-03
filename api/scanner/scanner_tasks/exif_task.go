@@ -9,6 +9,7 @@ import (
 	"github.com/photoview/photoview/api/graphql/models"
 	"github.com/photoview/photoview/api/log"
 	"github.com/photoview/photoview/api/scanner/externaltools/exif"
+	"github.com/photoview/photoview/api/scanner/media_type"
 	"github.com/photoview/photoview/api/scanner/scanner_task"
 )
 
@@ -30,6 +31,10 @@ func (t ExifTask) AfterMediaFound(ctx scanner_task.TaskContext, media *models.Me
 
 // SaveEXIF scans the media file for exif metadata and saves it in the database if found
 func SaveEXIF(tx *gorm.DB, media *models.Media) error {
+	if media_type.IsGPX(media.Path) {
+		return nil
+	}
+
 	// Check if EXIF data already exists
 	if media.ExifID != nil {
 		var e models.MediaEXIF

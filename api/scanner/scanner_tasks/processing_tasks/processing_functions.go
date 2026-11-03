@@ -12,7 +12,7 @@ import (
 
 func generateSaveHighResJPEG(tx *gorm.DB, media *models.Media, imageData *media_encoding.EncodeMediaData, highResName string, imagePath string, mediaURL *models.MediaURL) (*models.MediaURL, error) {
 
-	err := imageData.EncodeHighRes(imagePath)
+	err := imageData.EncodeHighRes(tx.Statement.Context, imagePath)
 	if err != nil {
 		return nil, errors.Wrap(err, "creating high-res cached image")
 	}

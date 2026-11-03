@@ -6,9 +6,10 @@ import (
 	"image"
 
 	"github.com/photoview/photoview/api/graphql/models"
-	"github.com/photoview/photoview/api/utils"
+	"github.com/photoview/photoview/api/scanner/gpx"
 	"github.com/photoview/photoview/api/scanner/media_encoding/executable_worker"
 	"github.com/photoview/photoview/api/scanner/media_type"
+	"github.com/photoview/photoview/api/utils"
 	"github.com/pkg/errors"
 	"gopkg.in/vansante/go-ffprobe.v2"
 
@@ -126,7 +127,7 @@ func (img *EncodeMediaData) ContentType() (media_type.MediaType, error) {
 	return imgType, nil
 }
 
-func (img *EncodeMediaData) EncodeHighRes(outputPath string) error {
+func (img *EncodeMediaData) EncodeHighRes(ctx context.Context, outputPath string) error {
 	contentType, err := img.ContentType()
 	if err != nil {
 		return err
@@ -134,6 +135,10 @@ func (img *EncodeMediaData) EncodeHighRes(outputPath string) error {
 
 	if !contentType.IsSupported() {
 		return errors.New("could not convert photo as file format is not supported")
+	}
+
+	if contentType == media_type.TypeGPX {
+		return gpx.RenderFile(ctx, img.Media.Path, outputPath)
 	}
 
 	// Use magick if there is no counterpart JPEG file to use instead
