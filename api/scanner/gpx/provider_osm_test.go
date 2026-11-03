@@ -6,7 +6,10 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -166,29 +169,6 @@ func TestOSMCacheDoesNotStoreFailedTiles(t *testing.T) {
 	require.Equal(t, 2, requests)
 }
 
-func TestOSMCacheFreshness(t *testing.T) {
-	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
-	for _, tc := range []struct {
-		name   string
-		header http.Header
-		want   time.Time
-		store  bool
-	}{
-		{"fallback", http.Header{}, now.Add(7 * 24 * time.Hour), true},
-		{"max-age beats Expires", http.Header{"Cache-Control": {"public, max-age=3600"}, "Expires": {now.Add(24 * time.Hour).Format(http.TimeFormat)}}, now.Add(time.Hour), true},
-		{"aged response", http.Header{"Cache-Control": {"max-age=3600"}, "Age": {"600"}}, now.Add(50 * time.Minute), true},
-		{"stale server date", http.Header{"Cache-Control": {"max-age=3600"}, "Date": {now.Add(-2 * time.Hour).Format(http.TimeFormat)}}, now, true},
-		{"no-store", http.Header{"Cache-Control": {"no-store"}}, now, false},
-		{"no-cache", http.Header{"Cache-Control": {"no-cache, max-age=3600"}}, now, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			expires, store := osmCacheExpiry(tc.header, now)
-			require.Equal(t, tc.want, expires)
-			require.Equal(t, tc.store, store)
-		})
-	}
-}
-
 func TestOSMNotModifiedRetainsExpires(t *testing.T) {
 	p := osmTestProvider(t)
 	requests := 0
@@ -231,19 +211,140 @@ func TestOSMMultipleCacheControlHeaders(t *testing.T) {
 }
 
 func TestOSMExpiresRespectsAgeAndInvalidValues(t *testing.T) {
-	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
-	for _, tc := range []struct {
-		name   string
-		header http.Header
-		want   time.Time
-	}{
-		{"invalid Expires", http.Header{"Expires": {"0"}}, now},
-		{"Expires response with Age", http.Header{"Date": {now.Format(http.TimeFormat)}, "Expires": {now.Add(time.Hour).Format(http.TimeFormat)}, "Age": {"1800"}}, now.Add(30 * time.Minute)},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			expires, store := osmCacheExpiry(tc.header, now)
-			require.True(t, store)
-			require.Equal(t, tc.want, expires)
+	for _, expires := range []string{"0", time.Now().Add(time.Hour).UTC().Format(http.TimeFormat)} {
+		t.Run(expires, func(t *testing.T) {
+			p := osmTestProvider(t)
+			requests := 0
+			mockTiles(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				w.Header().Set("Date", time.Now().UTC().Format(http.TimeFormat))
+				w.Header().Set("Expires", expires)
+				w.Header().Set("Age", "7200")
+				respondOSMTile(t, w)
+			}))
+			for i := 0; i < 2; i++ {
+				_, err := p.tile(context.Background(), http.DefaultClient, 2, 1, 1)
+				require.NoError(t, err)
+			}
+			require.Equal(t, 2, requests)
 		})
 	}
+}
+
+func TestOSMCacheUnavailableReturnsError(t *testing.T) {
+	osmTestProvider(t)
+	file := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(file, []byte("occupied"), 0600))
+	utils.ConfigureTestCache(file)
+	_, err := providerFromEnv()
+	require.Error(t, err, "cache initialization should fail gracefully rather than panic")
+}
+
+func TestOSMMaxAgeOverridesExpires(t *testing.T) {
+	for _, tc := range []struct {
+		control  string
+		expires  time.Time
+		requests int
+	}{
+		{"max-age=3600", time.Now().Add(-time.Hour), 1},
+		{"max-age=0", time.Now().Add(time.Hour), 2},
+	} {
+		t.Run(tc.control, func(t *testing.T) {
+			p := osmTestProvider(t)
+			requests := 0
+			mockTiles(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				w.Header().Set("Cache-Control", tc.control)
+				w.Header().Set("Expires", tc.expires.UTC().Format(http.TimeFormat))
+				respondOSMTile(t, w)
+			}))
+			for i := 0; i < 2; i++ {
+				_, err := p.tile(context.Background(), http.DefaultClient, 2, 1, 1)
+				require.NoError(t, err)
+			}
+			require.Equal(t, tc.requests, requests)
+		})
+	}
+}
+
+func TestOSMRejectsNoStoreRevalidation(t *testing.T) {
+	p := osmTestProvider(t)
+	requests := 0
+	mockTiles(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			w.Header().Set("Cache-Control", "max-age=0")
+			w.Header().Set("ETag", `"v1"`)
+			respondOSMTile(t, w)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store, max-age=3600")
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	_, err := p.tile(context.Background(), http.DefaultClient, 2, 1, 1)
+	require.NoError(t, err)
+	for i := 0; i < 2; i++ {
+		_, err = p.tile(context.Background(), http.DefaultClient, 2, 1, 1)
+		require.Error(t, err, "uncacheable revalidation must not enter a persistent preview")
+	}
+	require.Equal(t, 3, requests)
+}
+
+func TestOSMDoesNotServeStaleWhileRevalidating(t *testing.T) {
+	p := osmTestProvider(t)
+	requests := 0
+	mockTiles(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			w.Header().Set("Cache-Control", "max-age=0, stale-while-revalidate=60")
+			respondOSMTile(t, w)
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	_, err := p.tile(context.Background(), http.DefaultClient, 2, 1, 1)
+	require.NoError(t, err)
+	_, err = p.tile(context.Background(), http.DefaultClient, 2, 1, 1)
+	require.Error(t, err)
+	require.Equal(t, 2, requests)
+}
+
+func TestOSMNotModifiedMaxAgeOverridesExpires(t *testing.T) {
+	p := osmTestProvider(t)
+	requests := 0
+	mockTiles(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Cache-Control", "max-age=0")
+		w.Header().Set("ETag", `"v1"`)
+		if requests == 1 {
+			respondOSMTile(t, w)
+			return
+		}
+		w.Header().Set("Expires", time.Now().Add(time.Hour).UTC().Format(http.TimeFormat))
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	for i := 0; i < 3; i++ {
+		_, err := p.tile(context.Background(), http.DefaultClient, 2, 1, 1)
+		require.NoError(t, err)
+	}
+	require.Equal(t, 3, requests)
+}
+
+// Error bodies must never be consumed by the caching transport.
+type rejectReadBody struct{ reads, closes int }
+
+func (b *rejectReadBody) Read([]byte) (int, error) { b.reads++; return 0, io.EOF }
+func (b *rejectReadBody) Close() error             { b.closes++; return nil }
+func TestOSMRejectsErrorBodyBeforeCaching(t *testing.T) {
+	p := osmTestProvider(t)
+	body := &rejectReadBody{}
+	original := http.DefaultTransport
+	http.DefaultTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusNotFound, Header: make(http.Header), Body: body, Request: r}, nil
+	})
+	defer func() { http.DefaultTransport = original }()
+	_, err := p.tile(context.Background(), http.DefaultClient, 2, 1, 1)
+	require.Error(t, err)
+	require.Zero(t, body.reads)
+	require.Equal(t, 1, body.closes)
 }

@@ -296,10 +296,16 @@ Requests originate in the scanner, not the browser, so there is no browser
 Referer to forward and no album URL is disclosed to the tile service.
 
 For the standard OSM endpoint, raw tiles are cached privately under
-`PHOTOVIEW_MEDIA_CACHE/gpx-tiles/osm` across tracks and scans. Photoview honours
-`Cache-Control`, `Expires`, and response age, retains ETags and Last-Modified
-values, and revalidates expired tiles conditionally. With no usable freshness
-header it uses a seven-day lifetime. It does not send cache-bypass headers;
+`PHOTOVIEW_MEDIA_CACHE/gpx-tiles/osm-http` across tracks and scans, using
+[bartventer/httpcache](https://github.com/bartventer/httpcache)'s filesystem-backed
+HTTP transport. The transport handles HTTP expiry and conditional revalidation;
+Photoview does not maintain a separate tile freshness/validator database. When
+neither Cache-Control nor Expires is supplied, a small wrapper supplies OSM's
+seven-day fallback. It also validates tiles before they enter the cache and
+normalizes repeated Cache-Control fields and max-age precedence. Stale tiles are
+revalidated synchronously; uncacheable 304 updates fail rather than being stored.
+Requests do not
+send cache-bypass headers;
 OSM requests from concurrent scans are serialized. This provider cache does not
 change the existing lifetime or invalidation behavior of finished GPX previews.
 It is not enabled for other providers; their individual terms may differ.

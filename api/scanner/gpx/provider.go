@@ -11,7 +11,6 @@ import (
 	"math"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -24,6 +23,7 @@ import (
 type tileProvider struct {
 	template, attribution, userAgent string
 	osm                              bool
+	transport                        http.RoundTripper
 	maxZoom                          int
 }
 
@@ -66,6 +66,12 @@ func providerFromEnv() (tileProvider, error) {
 		}
 		p.maxZoom = z
 	}
+	if p.osm {
+		p.transport, err = newOSMTransport()
+		if err != nil {
+			return p, err
+		}
+	}
 	return p, nil
 }
 
@@ -100,24 +106,15 @@ func (p tileProvider) background(ctx context.Context, v viewport) (*image.RGBA, 
 }
 
 func (p tileProvider) tile(ctx context.Context, client *http.Client, z, x, y int) (image.Image, error) {
-	var cached *osmCachedTile
-	var cachePath string
 	if p.osm {
 		osmTileMutex.Lock()
 		defer osmTileMutex.Unlock()
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		cachePath = osmCachePath(z, x, y)
-		cached = readOSMTile(cachePath)
-		if cached != nil {
-			tile, err := decodeTile(cached.Data)
-			if err != nil {
-				cached = nil
-			} else if time.Now().Before(cached.Expires) {
-				return tile, nil
-			}
-		}
+		cachedClient := *client
+		cachedClient.Transport = p.transport
+		client = &cachedClient
 	}
 
 	target := strings.NewReplacer("{z}", strconv.Itoa(z), "{x}", strconv.Itoa(x), "{y}", strconv.Itoa(y)).Replace(p.template)
@@ -126,52 +123,12 @@ func (p tileProvider) tile(ctx context.Context, client *http.Client, z, x, y int
 		return nil, fmt.Errorf("invalid GPX tile request")
 	}
 	req.Header.Set("User-Agent", p.userAgent)
-	if cached != nil {
-		if cached.ETag != "" {
-			req.Header.Set("If-None-Match", cached.ETag)
-		}
-		if cached.LastModified != "" {
-			req.Header.Set("If-Modified-Since", cached.LastModified)
-		}
-	}
 	resp, err := client.Do(req)
 	// Do not wrap HTTP errors: they can contain the URL and API credentials.
 	if err != nil {
-		return nil, fmt.Errorf("GPX background request failed (network error or timeout)")
+		return nil, fmt.Errorf("GPX background request failed (provider, network, or cache error)")
 	}
 	defer resp.Body.Close()
-	if p.osm && cached != nil && resp.StatusCode == http.StatusNotModified {
-		tile, err := decodeTile(cached.Data)
-		if err != nil {
-			return nil, err
-		}
-		if len(resp.Header.Values("Cache-Control")) == 0 {
-			resp.Header.Set("Cache-Control", cached.CacheControl)
-		}
-		if len(resp.Header.Values("Expires")) == 0 && cached.ExpiresHeader != "" {
-			resp.Header.Set("Expires", cached.ExpiresHeader)
-		}
-		cached.CacheControl = strings.Join(resp.Header.Values("Cache-Control"), ",")
-		cached.ExpiresHeader = resp.Header.Get("Expires")
-		var store bool
-		cached.Expires, store = osmCacheExpiry(resp.Header, time.Now())
-		if etag := resp.Header.Get("ETag"); etag != "" {
-			cached.ETag = etag
-		}
-		if modified := resp.Header.Get("Last-Modified"); modified != "" {
-			cached.LastModified = modified
-		}
-		if store {
-			if err := writeOSMTile(cachePath, cached); err != nil {
-				return nil, err
-			}
-		} else {
-			if err := os.Remove(cachePath); err != nil && !os.IsNotExist(err) {
-				return nil, err
-			}
-		}
-		return tile, nil
-	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GPX background provider returned HTTP %d", resp.StatusCode)
 	}
@@ -183,19 +140,6 @@ func (p tileProvider) tile(ctx context.Context, client *http.Client, z, x, y int
 	tile, err := decodeTile(data)
 	if err != nil {
 		return nil, err
-	}
-	if p.osm {
-		expires, store := osmCacheExpiry(resp.Header, time.Now())
-		if store {
-			entry := &osmCachedTile{Data: data, Expires: expires, ETag: resp.Header.Get("ETag"), LastModified: resp.Header.Get("Last-Modified"), CacheControl: strings.Join(resp.Header.Values("Cache-Control"), ","), ExpiresHeader: resp.Header.Get("Expires")}
-			if err := writeOSMTile(cachePath, entry); err != nil {
-				return nil, err
-			}
-		} else {
-			if err := os.Remove(cachePath); err != nil && !os.IsNotExist(err) {
-				return nil, err
-			}
-		}
 	}
 	return tile, nil
 }

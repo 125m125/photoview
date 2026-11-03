@@ -1,114 +1,96 @@
 package gpx
 
 import (
-	"encoding/json"
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
+	"net/url"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
-	"time"
 
+	"github.com/bartventer/httpcache"
+	_ "github.com/bartventer/httpcache/store/fscache"
 	"github.com/photoview/photoview/api/utils"
 )
 
-// OSM requires cross-render tile reuse and conditional revalidation. Keep this
-// provider cache separate from the unchanged lifetime of media preview records.
-// Serialize OSM requests so concurrent album scans cannot download the same tile.
+// Serialize OSM lookups/fetches across scans; HTTP cache semantics and disk
+// storage belong to the transport rather than the GPX renderer.
 var osmTileMutex sync.Mutex
 
-type osmCachedTile struct {
-	Data          []byte
-	Expires       time.Time
-	ETag          string
-	LastModified  string
-	CacheControl  string
-	ExpiresHeader string
-}
-
-func osmCachePath(z, x, y int) string {
-	return filepath.Join(utils.MediaCachePath(), "gpx-tiles", "osm", strconv.Itoa(z), strconv.Itoa(x), strconv.Itoa(y)+".json")
-}
-
-func readOSMTile(filename string) *osmCachedTile {
-	file, err := os.Open(filename)
+func newOSMTransport() (transport http.RoundTripper, err error) {
+	// The library reports cache initialization failures by panicking.
+	defer func() {
+		if value := recover(); value != nil {
+			if cause, ok := value.(error); ok && errors.Is(cause, httpcache.ErrOpenCache) {
+				err = fmt.Errorf("cannot open GPX OSM tile cache: %w", cause)
+			} else {
+				panic(value)
+			}
+		}
+	}()
+	base, err := filepath.Abs(filepath.Join(utils.MediaCachePath(), "gpx-tiles"))
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	defer file.Close()
-	var tile osmCachedTile
-	// Tile bodies have a 2 MiB limit; JSON base64 adds one third.
-	if err := json.NewDecoder(io.LimitReader(file, 3<<20)).Decode(&tile); err != nil || len(tile.Data) == 0 || len(tile.Data) > 2<<20 {
-		return nil
-	}
-	return &tile
+	dsn := url.URL{Scheme: "fscache", Path: base, RawQuery: "appname=osm-http&umask=077&timeout=5s&connect_timeout=5s"}
+	return httpcache.NewTransport(dsn.String(), httpcache.WithUpstream(osmUpstream{})), nil
 }
 
-func writeOSMTile(filename string, tile *osmCachedTile) error {
-	if err := os.MkdirAll(filepath.Dir(filename), 0700); err != nil {
-		return fmt.Errorf("cannot create GPX OSM tile cache: %w", err)
-	}
-	file, err := os.CreateTemp(filepath.Dir(filename), ".tile-*")
+type osmUpstream struct{}
+
+func (osmUpstream) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := http.DefaultTransport.RoundTrip(req)
 	if err != nil {
-		return fmt.Errorf("cannot write GPX OSM tile cache: %w", err)
+		return nil, err
 	}
-	defer os.Remove(file.Name())
-	encodeErr := json.NewEncoder(file).Encode(tile)
-	closeErr := file.Close()
-	if encodeErr != nil {
-		return encodeErr
+	// Normalize repeated fields before the cache transport reads them.
+	control := strings.Join(resp.Header.Values("Cache-Control"), ",")
+	if len(resp.Header.Values("Cache-Control")) > 0 {
+		resp.Header.Set("Cache-Control", control)
 	}
-	if closeErr != nil {
-		return closeErr
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotModified {
+		resp.Body.Close()
+		return nil, fmt.Errorf("GPX background provider returned HTTP %d", resp.StatusCode)
 	}
-	return os.Rename(file.Name(), filename)
-}
-
-// Honour origin freshness headers, including already-aged proxy responses. If no
-// usable freshness information is supplied, OSM requires at least seven days.
-func osmCacheExpiry(header http.Header, now time.Time) (expires time.Time, store bool) {
-	expires = now.Add(7 * 24 * time.Hour)
-	revalidate := false
-	maxAge := -1
-	for _, directive := range strings.Split(strings.Join(header.Values("Cache-Control"), ","), ",") {
-		key, value, _ := strings.Cut(strings.TrimSpace(directive), "=")
-		switch strings.ToLower(key) {
-		case "no-store":
-			return now, false
-		case "no-cache":
-			revalidate = true
-		case "max-age":
-			seconds, err := strconv.Atoi(strings.Trim(value, `"`))
-			if err == nil && seconds >= 0 {
-				maxAge = seconds
+	// Do not pass uncacheable 304 updates into the library's unconditional merge.
+	if resp.StatusCode == http.StatusNotModified {
+		for _, directive := range strings.Split(control, ",") {
+			if strings.EqualFold(strings.TrimSpace(directive), "no-store") {
+				resp.Body.Close()
+				return nil, fmt.Errorf("GPX tile revalidation prohibits storage")
 			}
 		}
 	}
-	date, err := http.ParseTime(header.Get("Date"))
-	if err != nil {
-		date = now
+	// Prefer synchronous validation to stale responses/background refreshes.
+	if resp.StatusCode == http.StatusOK || control != "" {
+		resp.Header.Set("Cache-Control", control+", must-revalidate")
 	}
-	ageSeconds, _ := strconv.Atoi(header.Get("Age"))
-	// Avoid duration overflow from an invalid or hostile Age field.
-	ageSeconds = min(max(0, ageSeconds), 365*24*60*60)
-	age := max(time.Duration(ageSeconds)*time.Second, now.Sub(date))
-	if maxAge >= 0 {
-		lifetime := time.Duration(min(maxAge, 365*24*60*60)) * time.Second
-		expires = now.Add(max(time.Duration(0), lifetime-age))
-	} else if len(header.Values("Expires")) > 0 {
-		value, err := http.ParseTime(header.Get("Expires"))
-		if err != nil {
-			expires = now
-		} else {
-			expires = now.Add(max(time.Duration(0), value.Sub(date)-age))
-		}
+	// v0.14 can fall through to Expires/heuristic freshness for max-age=0.
+	if strings.Contains(strings.ToLower(control), "max-age") {
+		resp.Header.Set("Expires", "0")
+	}
+	if resp.StatusCode == http.StatusNotModified {
+		return resp, nil
 	}
 
-	if revalidate {
-		expires = now
+	// Validate and bound the body before the caching transport can persist it.
+	defer resp.Body.Close()
+	const limit = 2 << 20
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil || len(data) > limit {
+		return nil, fmt.Errorf("GPX background tile response unreadable or too large")
 	}
-	return expires, true
+	if _, err := decodeTile(data); err != nil {
+		return nil, err
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(data))
+	resp.ContentLength = int64(len(data))
+	// OSM requires seven days when no freshness headers are supplied.
+	if control == "" && len(resp.Header.Values("Expires")) == 0 {
+		resp.Header.Set("Cache-Control", "max-age=604800, must-revalidate")
+	}
+	return resp, nil
 }
