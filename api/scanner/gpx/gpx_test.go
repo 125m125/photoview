@@ -17,15 +17,7 @@ import (
 
 	_ "github.com/photoview/photoview/api/test_utils/flags"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/gographics/imagick.v3/imagick"
 )
-
-func TestMain(m *testing.M) {
-	imagick.Initialize()
-	code := m.Run()
-	imagick.Terminate()
-	os.Exit(code)
-}
 
 func TestParseSegments(t *testing.T) {
 	segments, err := parse(strings.NewReader(`<gpx xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg><trkpt lat="0" lon="0"/><trkpt lat="1" lon="2"/></trkseg><trkseg><trkpt lat="3" lon="4"/></trkseg></trk><trk><trkseg><trkpt lat="5" lon="6"/><trkpt lat="NaN" lon="0"/><trkpt lat="7" lon="8"/></trkseg></trk></gpx>`))
@@ -182,4 +174,44 @@ func mockTiles(t *testing.T, handler http.Handler) string {
 	})
 	t.Cleanup(func() { http.DefaultTransport = original })
 	return "https://synthetic.test"
+}
+
+// Attribution must render without native image libraries or installed fonts.
+func TestAttribution(t *testing.T) {
+	for _, text := range []string{
+		"© OpenStreetMap contributors https://www.openstreetmap.org/copyright",
+		"© Map provider\n© Data contributors",
+		strings.Repeat("© Map contributors ", 20),
+	} {
+		t.Run(text, func(t *testing.T) {
+			background := image.NewRGBA(image.Rect(0, 0, width, mapHeight))
+			background.SetRGBA(10, 10, color.RGBA{20, 40, 60, 255})
+			img, err := attribute(background, text)
+			require.NoError(t, err)
+			require.Equal(t, background.At(10, 10), img.At(10, 10))
+			if strings.Contains(text, "\n") || len(text) > 200 {
+				require.Greater(t, img.Bounds().Dy(), mapHeight+28)
+			}
+			// Every footer line has visible ink.
+			for top := mapHeight + 8; top < img.Bounds().Dy(); top += 20 {
+				dark := 0
+				for y := top; y < min(top+20, img.Bounds().Dy()); y++ {
+					for x := 0; x < img.Bounds().Dx(); x++ {
+						r, _, _, _ := img.At(x, y).RGBA()
+						if r < 20000 {
+							dark++
+						}
+					}
+				}
+				require.Greater(t, dark, 20)
+			}
+		})
+	}
+	_, err := attribute(image.NewRGBA(image.Rect(0, 0, width, mapHeight)), strings.Repeat("credits\n", 17))
+	require.Error(t, err)
+}
+
+func TestAttributionRejectsUnsupportedGlyphs(t *testing.T) {
+	_, err := attribute(image.NewRGBA(image.Rect(0, 0, width, mapHeight)), "© Map 地图")
+	require.Error(t, err, "required credits must not silently become missing-glyph boxes")
 }

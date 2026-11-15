@@ -20,6 +20,7 @@ require (
 	github.com/vektah/gqlparser/v2 v2.5.64
 	github.com/wsxiaoys/terminal v0.0.0-20160513160801-0940f3fc43a0
 	golang.org/x/crypto v0.58.0
+	golang.org/x/image v0.38.0
 	golang.org/x/text v0.43.0
 	gopkg.in/gographics/imagick.v3 v3.7.3
 	gopkg.in/vansante/go-ffprobe.v2 v2.3.1

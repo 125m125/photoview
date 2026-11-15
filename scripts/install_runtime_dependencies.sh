@@ -29,10 +29,6 @@ LIBS=(
   liblcms2-2
   zlib1g
 
-  # GPX map attribution
-  fonts-dejavu-core
-  libfreetype6
-
   # ImageMagick dependencies
   libgomp1
   libbz2-1.0

@@ -1,14 +1,12 @@
 package gpx
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
 	"image/jpeg"
-	"image/png"
 	"math"
 	"os"
 	"path/filepath"
@@ -16,7 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/gographics/imagick.v3/imagick"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/gofont/goregular"
+	"golang.org/x/image/font/opentype"
+	"golang.org/x/image/math/fixed"
 )
 
 const width, mapHeight, padding = 1024, 768, 40
@@ -165,34 +166,24 @@ func abs(x int) int {
 // Attribution lives in a footer outside the map, so tracks cannot obscure it.
 // At 1024px wide the normal thumbnail pipeline preserves its size and legibility.
 func attribute(img *image.RGBA, text string) (image.Image, error) {
-	wand := imagick.NewMagickWand()
-	defer wand.Destroy()
-	white := imagick.NewPixelWand()
-	defer white.Destroy()
-	white.SetColor("white")
-	if err := wand.NewImage(width, mapHeight, white); err != nil {
+	// Embed Go Regular so attribution never depends on host fonts, ImageMagick
+	// delegates, or Ghostscript. Each render owns its face (not concurrency-safe).
+	ttf, err := opentype.Parse(goregular.TTF)
+	if err != nil {
 		return nil, err
 	}
-	pen := imagick.NewDrawingWand()
-	defer pen.Destroy()
-	// Use a known font, installed with the runtime dependencies.
-	if err := pen.SetFont("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"); err != nil {
+	face, err := opentype.NewFace(ttf, &opentype.FaceOptions{Size: 14, DPI: 72, Hinting: font.HintingFull})
+	if err != nil {
 		return nil, err
 	}
-	pen.SetFontSize(14)
-	pen.SetTextEncoding("UTF-8")
-	black := imagick.NewPixelWand()
-	defer black.Destroy()
-	black.SetColor("black")
-	pen.SetFillColor(black)
+	defer face.Close()
 	var lines []string
 	current := ""
 	for _, r := range text {
-		metrics := wand.QueryFontMetrics(pen, current+string(r))
-		if metrics == nil {
-			return nil, fmt.Errorf("GPX attribution font unavailable; install fonts-dejavu-core and ImageMagick with FreeType")
+		if _, ok := face.GlyphAdvance(r); r != '\n' && !ok {
+			return nil, fmt.Errorf("GPX attribution character U+%04X is unsupported by the embedded Go Regular font; use provider-approved credits supported by this font", r)
 		}
-		if r == '\n' || metrics.TextWidth > width-16 {
+		if r == '\n' || font.MeasureString(face, current+string(r)).Ceil() > width-16 {
 			lines = append(lines, current)
 			current = ""
 			if r == '\n' {
@@ -210,24 +201,10 @@ func attribute(img *image.RGBA, text string) (image.Image, error) {
 	result := image.NewRGBA(image.Rect(0, 0, width, mapHeight+8+20*len(lines)))
 	draw.Draw(result, result.Bounds(), image.White, image.Point{}, draw.Src)
 	draw.Draw(result, img.Bounds(), img, image.Point{}, draw.Src)
-	var data bytes.Buffer
-	if err := png.Encode(&data, result); err != nil {
-		return nil, err
-	}
-	if err := wand.ReadImageBlob(data.Bytes()); err != nil {
-		return nil, err
-	}
+	pen := font.Drawer{Dst: result, Src: image.Black, Face: face}
 	for i, line := range lines {
-		if err := wand.AnnotateImage(pen, 8, float64(mapHeight+18+i*20), 0, line); err != nil {
-			return nil, err
-		}
+		pen.Dot = fixed.P(8, mapHeight+18+i*20)
+		pen.DrawString(line)
 	}
-	if err := wand.SetImageFormat("PNG"); err != nil {
-		return nil, err
-	}
-	blob, err := wand.GetImageBlob()
-	if err != nil {
-		return nil, err
-	}
-	return png.Decode(bytes.NewReader(blob))
+	return result, nil
 }

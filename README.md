@@ -258,13 +258,13 @@ and data-source credit and copyright URL in this setting. No manual editing of
 preview images is needed. Providers requiring a logo, an interactive attribution
 control, or clickable links beyond the printed credits are not supported by this
 initial renderer unless they explicitly permit this static-image attribution.
-Local installations need ImageMagick with FreeType and `fonts-dejavu-core`; the
-container dependency scripts include these requirements. The main Dockerfile uses
-an already-built `photoview/dependencies:trixie` image: an application build alone
-does not rebuild ImageMagick. Builders using an older dependency image without
-FreeType must rebuild the dependency image from `dependencies/Dockerfile` and
-use that image in the application's dependency stage. Installing the font package
-alone cannot add a missing ImageMagick delegate.
+Attribution uses the Go Regular font embedded in the application. GPX map
+rendering needs no installed fonts, ImageMagick FreeType delegate, or Ghostscript.
+The usual ImageMagick dependency is still needed for Photoview's thumbnail
+pipeline. Credits containing characters unsupported by the embedded font fail
+preview generation instead of displaying incorrect attribution. The font and
+Go image library licenses are in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt);
+include this file when distributing a built binary.
 
 There is deliberately no default external tile server. For a hosted alternative
 to Mapbox, [Geoapify](https://www.geoapify.com/pricing/) offers a free plan without
