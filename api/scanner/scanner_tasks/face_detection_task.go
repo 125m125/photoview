@@ -4,6 +4,7 @@ import (
 	"github.com/photoview/photoview/api/graphql/models"
 	"github.com/photoview/photoview/api/scanner/face_detection"
 	"github.com/photoview/photoview/api/scanner/media_encoding"
+	"github.com/photoview/photoview/api/scanner/media_type"
 	"github.com/photoview/photoview/api/scanner/scanner_task"
 	"github.com/photoview/photoview/api/scanner/scanner_utils"
 )
@@ -17,7 +18,7 @@ func (t FaceDetectionTask) AfterProcessMedia(ctx scanner_task.TaskContext, media
 
 	didProcess := len(updatedURLs) > 0
 
-	if didProcess && mediaData.Media.Type == models.MediaTypePhoto {
+	if didProcess && mediaData.Media.Type == models.MediaTypePhoto && !media_type.IsGPX(mediaData.Media.Path) {
 		media := mediaData.Media
 		if face_detection.GlobalFaceDetector == nil {
 			return nil

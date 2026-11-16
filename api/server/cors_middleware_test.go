@@ -46,7 +46,7 @@ func TestCORSMiddlewareDevMode(t *testing.T) {
 		assert.Equal(t, "GET, POST, OPTIONS", rec.Header().Get("Access-Control-Allow-Methods"))
 		assert.Equal(t, "authorization, content-type, content-length, TokenPassword", rec.Header().Get("Access-Control-Allow-Headers"))
 		assert.Equal(t, "true", rec.Header().Get("Access-Control-Allow-Credentials"))
-		assert.Equal(t, "content-length", rec.Header().Get("Access-Control-Expose-Headers"))
+		assert.Equal(t, "content-length, content-disposition", rec.Header().Get("Access-Control-Expose-Headers"))
 	})
 
 	t.Run("handles OPTIONS request", func(t *testing.T) {
@@ -450,7 +450,7 @@ func TestHandleCORS(t *testing.T) {
 		assert.Equal(t, "GET, POST, OPTIONS", rec.Header().Get("Access-Control-Allow-Methods"))
 		assert.Equal(t, "authorization, content-type, content-length, TokenPassword", rec.Header().Get("Access-Control-Allow-Headers"))
 		assert.Equal(t, "true", rec.Header().Get("Access-Control-Allow-Credentials"))
-		assert.Equal(t, "content-length", rec.Header().Get("Access-Control-Expose-Headers"))
+		assert.Equal(t, "content-length, content-disposition", rec.Header().Get("Access-Control-Expose-Headers"))
 	})
 
 	t.Run("does not set CORS headers when disabled", func(t *testing.T) {
@@ -480,4 +480,16 @@ func mustParseURLs(urls ...string) []*url.URL {
 		result[i] = parsed
 	}
 	return result
+}
+
+func TestDownloadFilenameHeaderIsExposed(t *testing.T) {
+	middleware := CORSMiddleware(true)
+	handler := middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Disposition", "attachment; filename=walk.gpx")
+	}))
+	req := httptest.NewRequest("GET", "/api/photo/walk.gpx", nil)
+	req.Header.Set("Origin", "http://localhost:1234")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	assert.Contains(t, rec.Header().Get("Access-Control-Expose-Headers"), "content-disposition")
 }

@@ -31,7 +31,7 @@ func (t SidecarTask) AfterMediaFound(ctx scanner_task.TaskContext, media *models
 		return fmt.Errorf("scan for sidecar file %s failed: media type is %s", media.Path, mediaType)
 	}
 
-	if mediaType.IsWebCompatible() {
+	if mediaType == media_type.TypeGPX || mediaType.IsWebCompatible() {
 		return nil
 	}
 
@@ -59,7 +59,7 @@ func (t SidecarTask) ProcessMedia(ctx scanner_task.TaskContext, mediaData *media
 		return []*models.MediaURL{}, errors.Wrap(err, "sidecar task, process media")
 	}
 
-	if mediaType.IsWebCompatible() {
+	if mediaType == media_type.TypeGPX || mediaType.IsWebCompatible() {
 		return []*models.MediaURL{}, nil
 	}
 

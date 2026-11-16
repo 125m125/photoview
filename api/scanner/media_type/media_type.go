@@ -1,6 +1,7 @@
 package media_type
 
 import (
+	"path/filepath"
 	"strings"
 	"unique"
 
@@ -13,6 +14,9 @@ type MediaType unique.Handle[string]
 // GetMediaType returns a media type of file `f`.
 // This function is thread-safe.
 func GetMediaType(f string) MediaType {
+	if IsGPX(f) {
+		return TypeGPX
+	}
 	mime, err := exif.MIMEType(f)
 	if err != nil {
 		log.Warn(nil, "GetMediaType() error.", "error", err, "file", f)
@@ -28,6 +32,8 @@ func mediaType(mime string) MediaType {
 
 var (
 	TypeUnknown MediaType
+
+	TypeGPX = mediaType("application/gpx+xml")
 
 	TypeImage = mediaType("image/")
 	TypeVideo = mediaType("video/")
@@ -124,7 +130,7 @@ func (t MediaType) IsSupported() bool {
 		return false
 	}
 
-	return t.IsImage() || t.IsVideo()
+	return t == TypeGPX || t.IsImage() || t.IsVideo()
 }
 
 func (t MediaType) String() string {
@@ -134,3 +140,6 @@ func (t MediaType) String() string {
 
 	return unique.Handle[string](t).Value()
 }
+
+// IsGPX recognizes GPX before any image-specific probing.
+func IsGPX(filename string) bool { return strings.EqualFold(filepath.Ext(filename), ".gpx") }

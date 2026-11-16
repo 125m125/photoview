@@ -1,8 +1,10 @@
 package routes
 
 import (
+	"mime"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/gorilla/mux"
 	"gorm.io/gorm"
@@ -10,6 +12,7 @@ import (
 	"github.com/photoview/photoview/api/graphql/models"
 	"github.com/photoview/photoview/api/log"
 	"github.com/photoview/photoview/api/scanner"
+	"github.com/photoview/photoview/api/scanner/media_type"
 )
 
 func RegisterPhotoRoutes(db *gorm.DB, router *mux.Router) {
@@ -50,6 +53,11 @@ func RegisterPhotoRoutes(db *gorm.DB, router *mux.Router) {
 		}
 
 		if _, err := os.Stat(cachedPath); os.IsNotExist((err)) {
+			// GPX composition is scan-time only. A rescan repairs missing maps.
+			if media_type.IsGPX(media.Path) {
+				http.NotFound(w, r)
+				return
+			}
 			// err := db.Transaction(func(tx *gorm.DB) error {
 			if err = scanner.ProcessSingleMediaFunc(r.Context(), db, media); err != nil {
 				log.Error(r.Context(), "processing image not found in cache",
@@ -76,6 +84,11 @@ func RegisterPhotoRoutes(db *gorm.DB, router *mux.Router) {
 			w.Header().Set("Content-Type", mediaURL.ContentType)
 		}
 
+		if mediaURL.Purpose == models.MediaOriginal && media_type.IsGPX(media.Path) {
+			w.Header().Set("Content-Type", "application/gpx+xml")
+			w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filepath.Base(media.Path)}))
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+		}
 		http.ServeFile(w, r, cachedPath)
 	})
 }

@@ -21,6 +21,10 @@ func (t CounterpartFilesTask) MediaFound(ctx scanner_task.TaskContext, fileInfo 
 		return true, nil
 	}
 
+	if fileType == media_type.TypeGPX {
+		return false, nil
+	}
+
 	if utils.EnvDisableRawProcessing.GetBool() {
 		if !fileType.IsWebCompatible() {
 			return true, nil
@@ -47,7 +51,7 @@ func (t CounterpartFilesTask) BeforeProcessMedia(ctx scanner_task.TaskContext, m
 		return ctx, fmt.Errorf("scan for counterpart file %s failed: media type is %s", mediaData.Media.Path, mediaType)
 	}
 
-	if mediaType.IsWebCompatible() {
+	if mediaType == media_type.TypeGPX || mediaType.IsWebCompatible() {
 		return ctx, nil
 	}
 
