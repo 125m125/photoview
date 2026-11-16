@@ -318,11 +318,13 @@ not a suitable default for Photoview's permanent server-side preview cache.
 
 GPX parsing and track drawing happen locally during scanning. The provider only
 receives background tile coordinates, which reveal the approximate map area,
-never the full trace, timestamps, or GPX file. A preview needs at most 20 tile
-requests, issued sequentially, with no automatic retries, a five-second timeout
-per request, and a 30-second deadline for background fetching. Tiles are reused within
-one render; the finished preview and normal thumbnail are cached afterwards. The
-standard OSM endpoint additionally uses the provider tile cache described above.
+never the full trace, timestamps, or GPX file. The map is rendered at 2048 × 1536
+pixels plus an attribution footer, with antialiased track lines and markers. A
+preview needs at most 63 tile requests, issued sequentially, with no automatic
+retries, a five-second timeout per request, and a 30-second deadline for background
+fetching. Tiles are reused within one render; the finished preview and normal
+thumbnail are cached afterwards. The standard OSM endpoint additionally uses the
+provider tile cache described above.
 Provider URLs and credentials are not included in preview metadata, frontend
 configuration, or provider-error messages.
 

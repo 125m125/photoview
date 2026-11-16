@@ -14,13 +14,18 @@ import (
 	"strings"
 	"time"
 
+	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/gofont/goregular"
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 )
 
-const width, mapHeight, padding = 1024, 768, 40
+// Double the initial preview resolution while retaining the same track framing
+// and legible attribution in the normal 1024px thumbnail.
+const previewScale = 2
+const width, mapHeight, padding = 1024 * previewScale, 768 * previewScale, 40 * previewScale
+const trackSamples = 2
 
 type viewport struct {
 	zoom           int
@@ -97,27 +102,8 @@ func RenderFile(ctx context.Context, inputPath, outputPath string) error {
 	if err != nil {
 		return err
 	}
-	trackColor := color.RGBA{210, 35, 45, 255}
-	for _, segment := range segments {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		x, y := view.pixel(segment[0])
-		prev := image.Pt(int(math.Round(x)), int(math.Round(y)))
-		circle(img, prev, 3, trackColor)
-		for _, p := range segment[1:] {
-			x, y = view.pixel(p)
-			next := image.Pt(int(math.Round(x)), int(math.Round(y)))
-			if next != prev {
-				line(img, prev, next, trackColor)
-			}
-			prev = next
-		}
-		x, y = view.pixel(segment[0])
-		circle(img, image.Pt(int(math.Round(x)), int(math.Round(y))), 7, color.RGBA{255, 255, 255, 255})
-		circle(img, image.Pt(int(math.Round(x)), int(math.Round(y))), 5, color.RGBA{20, 150, 65, 255})
-		circle(img, prev, 7, color.RGBA{255, 255, 255, 255})
-		circle(img, prev, 4, trackColor)
+	if err := drawTracks(ctx, img, view, segments); err != nil {
+		return err
 	}
 	result, err := attribute(img, provider.attribution)
 	if err != nil {
@@ -139,6 +125,37 @@ func RenderFile(ctx context.Context, inputPath, outputPath string) error {
 	return os.Rename(temp.Name(), outputPath)
 }
 
+// drawTracks draws each segment separately and marks its start and end.
+func drawTracks(ctx context.Context, background *image.RGBA, view viewport, segments [][]point) error {
+	// Supersample only the transparent overlay, leaving map labels untouched.
+	// The fixed-size buffer keeps memory independent of the GPX point count.
+	img := image.NewRGBA(image.Rect(0, 0, width*trackSamples, mapHeight*trackSamples))
+	trackColor := color.RGBA{210, 35, 45, 255}
+	for _, segment := range segments {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		x, y := view.pixel(segment[0])
+		prev := image.Pt(int(math.Round(x*trackSamples)), int(math.Round(y*trackSamples)))
+		circle(img, prev, 3*previewScale*trackSamples, trackColor)
+		for _, p := range segment[1:] {
+			x, y = view.pixel(p)
+			next := image.Pt(int(math.Round(x*trackSamples)), int(math.Round(y*trackSamples)))
+			if next != prev {
+				line(img, prev, next, 2*previewScale*trackSamples, trackColor)
+			}
+			prev = next
+		}
+		x, y = view.pixel(segment[0])
+		circle(img, image.Pt(int(math.Round(x*trackSamples)), int(math.Round(y*trackSamples))), 7*previewScale*trackSamples, color.RGBA{255, 255, 255, 255})
+		circle(img, image.Pt(int(math.Round(x*trackSamples)), int(math.Round(y*trackSamples))), 5*previewScale*trackSamples, color.RGBA{20, 150, 65, 255})
+		circle(img, prev, 7*previewScale*trackSamples, color.RGBA{255, 255, 255, 255})
+		circle(img, prev, 4*previewScale*trackSamples, trackColor)
+	}
+	xdraw.ApproxBiLinear.Scale(background, background.Bounds(), img, img.Bounds(), draw.Over, nil)
+	return nil
+}
+
 func circle(img *image.RGBA, p image.Point, r int, c color.RGBA) {
 	for y := -r; y <= r; y++ {
 		for x := -r; x <= r; x++ {
@@ -148,12 +165,12 @@ func circle(img *image.RGBA, p image.Point, r int, c color.RGBA) {
 		}
 	}
 }
-func line(img *image.RGBA, a, b image.Point, c color.RGBA) {
+func line(img *image.RGBA, a, b image.Point, radius int, c color.RGBA) {
 	dx, dy := b.X-a.X, b.Y-a.Y
 	steps := max(abs(dx), abs(dy))
 	for i := 0; i <= steps; i++ {
 		t := float64(i) / float64(steps)
-		circle(img, image.Pt(a.X+int(math.Round(float64(dx)*t)), a.Y+int(math.Round(float64(dy)*t))), 2, c)
+		circle(img, image.Pt(a.X+int(math.Round(float64(dx)*t)), a.Y+int(math.Round(float64(dy)*t))), radius, c)
 	}
 }
 func abs(x int) int {
@@ -172,7 +189,7 @@ func attribute(img *image.RGBA, text string) (image.Image, error) {
 	if err != nil {
 		return nil, err
 	}
-	face, err := opentype.NewFace(ttf, &opentype.FaceOptions{Size: 14, DPI: 72, Hinting: font.HintingFull})
+	face, err := opentype.NewFace(ttf, &opentype.FaceOptions{Size: 14 * previewScale, DPI: 72, Hinting: font.HintingFull})
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +200,7 @@ func attribute(img *image.RGBA, text string) (image.Image, error) {
 		if _, ok := face.GlyphAdvance(r); r != '\n' && !ok {
 			return nil, fmt.Errorf("GPX attribution character U+%04X is unsupported by the embedded Go Regular font; use provider-approved credits supported by this font", r)
 		}
-		if r == '\n' || font.MeasureString(face, current+string(r)).Ceil() > width-16 {
+		if r == '\n' || font.MeasureString(face, current+string(r)).Ceil() > width-16*previewScale {
 			lines = append(lines, current)
 			current = ""
 			if r == '\n' {
@@ -198,12 +215,12 @@ func attribute(img *image.RGBA, text string) (image.Image, error) {
 	if len(lines) > 16 {
 		return nil, fmt.Errorf("GPX provider attribution is too long")
 	}
-	result := image.NewRGBA(image.Rect(0, 0, width, mapHeight+8+20*len(lines)))
+	result := image.NewRGBA(image.Rect(0, 0, width, mapHeight+8*previewScale+20*previewScale*len(lines)))
 	draw.Draw(result, result.Bounds(), image.White, image.Point{}, draw.Src)
 	draw.Draw(result, img.Bounds(), img, image.Point{}, draw.Src)
 	pen := font.Drawer{Dst: result, Src: image.Black, Face: face}
 	for i, line := range lines {
-		pen.Dot = fixed.P(8, mapHeight+18+i*20)
+		pen.Dot = fixed.P(8*previewScale, mapHeight+18*previewScale+i*20*previewScale)
 		pen.DrawString(line)
 	}
 	return result, nil

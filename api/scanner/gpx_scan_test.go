@@ -121,12 +121,23 @@ func TestGPXScanAndCache(t *testing.T) {
 	require.NoError(t, err)
 	highPath, err := high.CachedPath()
 	require.NoError(t, err)
+	// Simulate metadata from a cached preview created by an older renderer.
+	require.NoError(t, db.Model(high).Updates(map[string]interface{}{
+		"width": 1024, "height": 796, "file_size": 1,
+	}).Error)
 	require.NoError(t, os.Remove(highPath))
 	t.Setenv("PHOTOVIEW_GPX_TILE_URL", "https://synthetic.test/{z}/{x}/{y}.png")
 	scan()
 	require.Greater(t, requests, before)
 	_, err = os.Stat(highPath)
 	require.NoError(t, err)
+	var regenerated models.MediaURL
+	require.NoError(t, db.First(&regenerated, high.ID).Error)
+	require.Equal(t, 2048, regenerated.Width)
+	require.Equal(t, 1592, regenerated.Height)
+	stats, err := os.Stat(highPath)
+	require.NoError(t, err)
+	require.Equal(t, stats.Size(), regenerated.FileSize)
 	var count int64
 	require.NoError(t, db.Model(&models.MediaURL{}).Count(&count).Error)
 	require.EqualValues(t, 6, count)

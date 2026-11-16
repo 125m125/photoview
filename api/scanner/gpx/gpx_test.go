@@ -46,10 +46,10 @@ func TestLargeTrack(t *testing.T) {
 	view := fit(segments, 16)
 	for _, p := range []point{segments[0][0], segments[0][99999]} {
 		x, y := view.pixel(p)
-		require.GreaterOrEqual(t, x, 32.0)
-		require.LessOrEqual(t, x, 992.0)
-		require.GreaterOrEqual(t, y, 32.0)
-		require.LessOrEqual(t, y, 736.0)
+		require.GreaterOrEqual(t, x, 80.0)
+		require.LessOrEqual(t, x, 1968.0)
+		require.GreaterOrEqual(t, y, 80.0)
+		require.LessOrEqual(t, y, 1456.0)
 	}
 	server := mockTiles(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.NoError(t, png.Encode(w, image.NewGray(image.Rect(0, 0, 256, 256))))
@@ -68,7 +68,7 @@ func TestAntimeridianAndPoles(t *testing.T) {
 		require.Greater(t, view.zoom, 0)
 		for _, p := range points {
 			x, y := view.pixel(p)
-			require.True(t, x >= 32 && x <= 992 && y >= 32 && y <= 736, "%v: %v,%v", p, x, y)
+			require.True(t, x >= 80 && x <= 1968 && y >= 80 && y <= 1456, "%v: %v,%v", p, x, y)
 		}
 	}
 }
@@ -90,28 +90,28 @@ func TestRenderFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(input, []byte(`<gpx><trk><trkseg><trkpt lat="0" lon="-1"/><trkpt lat="0" lon="1"/></trkseg><trkseg><trkpt lat="1" lon="-1"/><trkpt lat="1" lon="1"/></trkseg></trk></gpx>`), 0600))
 	require.NoError(t, RenderFile(context.Background(), input, output))
 	require.Greater(t, requests, 0)
-	require.LessOrEqual(t, requests, 20)
+	require.LessOrEqual(t, requests, 63)
 	f, err := os.Open(output)
 	require.NoError(t, err)
 	defer f.Close()
 	img, err := jpeg.Decode(f)
 	require.NoError(t, err)
-	require.Equal(t, 1024, img.Bounds().Dx())
-	require.Greater(t, img.Bounds().Dy(), 768)
+	require.Equal(t, 2048, img.Bounds().Dx())
+	require.Equal(t, 1592, img.Bounds().Dy())
 	// A segment joins neither the two parallel tracks nor their start/end markers.
-	r, g, b, _ := img.At(512, 384).RGBA()
+	r, g, b, _ := img.At(1024, 768).RGBA()
 	require.Less(t, r, g)
 	require.Less(t, g, b)
-	for _, y := range []int{202, 566} {
-		r, g, b, _ := img.At(512, y).RGBA()
+	for _, y := range []int{404, 1132} {
+		r, g, b, _ := img.At(1024, y).RGBA()
 		require.Greater(t, r, g*2)
 		require.Greater(t, r, b*2)
 	}
 
 	// Attribution is embedded as dark glyphs on the white footer.
 	dark := 0
-	for y := 768; y < img.Bounds().Dy(); y++ {
-		for x := 0; x < 1024; x++ {
+	for y := 1536; y < img.Bounds().Dy(); y++ {
+		for x := 0; x < 2048; x++ {
 			r, _, _, _ := img.At(x, y).RGBA()
 			if r < 20000 {
 				dark++
@@ -190,12 +190,12 @@ func TestAttribution(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, background.At(10, 10), img.At(10, 10))
 			if strings.Contains(text, "\n") || len(text) > 200 {
-				require.Greater(t, img.Bounds().Dy(), mapHeight+28)
+				require.Greater(t, img.Bounds().Dy(), mapHeight+56)
 			}
 			// Every footer line has visible ink.
-			for top := mapHeight + 8; top < img.Bounds().Dy(); top += 20 {
+			for top := mapHeight + 16; top < img.Bounds().Dy(); top += 40 {
 				dark := 0
-				for y := top; y < min(top+20, img.Bounds().Dy()); y++ {
+				for y := top; y < min(top+40, img.Bounds().Dy()); y++ {
 					for x := 0; x < img.Bounds().Dx(); x++ {
 						r, _, _, _ := img.At(x, y).RGBA()
 						if r < 20000 {
@@ -214,4 +214,24 @@ func TestAttribution(t *testing.T) {
 func TestAttributionRejectsUnsupportedGlyphs(t *testing.T) {
 	_, err := attribute(image.NewRGBA(image.Rect(0, 0, width, mapHeight)), "© Map 地图")
 	require.Error(t, err, "required credits must not silently become missing-glyph boxes")
+}
+
+func TestTrackEdgesAreAntialiased(t *testing.T) {
+	img := image.NewRGBA(image.Rect(0, 0, width, mapHeight))
+	draw.Draw(img, img.Bounds(), image.White, image.Point{}, draw.Src)
+	// A short diagonal whose endpoints do not lie on whole pixels.
+	segments := [][]point{{{Lat: 0, Lon: -170}, {Lat: 30, Lon: -130}}}
+	require.NoError(t, drawTracks(context.Background(), img, viewport{}, segments))
+	blended := 0
+	for y := 85; y < 150; y++ {
+		for x := 0; x < 65; x++ {
+			pixel := img.RGBAAt(x, y)
+			if pixel != (color.RGBA{255, 255, 255, 255}) &&
+				pixel != (color.RGBA{210, 35, 45, 255}) &&
+				pixel != (color.RGBA{20, 150, 65, 255}) {
+				blended++
+			}
+		}
+	}
+	require.Greater(t, blended, 20, "track and marker edges need partial pixel coverage")
 }

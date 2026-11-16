@@ -75,7 +75,12 @@ func (t ProcessPhotoTask) ProcessMedia(ctx scanner_task.TaskContext, mediaData *
 			log.Info(ctx, "High-res photo found in database but not in cache, re-encoding photo to cache", "media_name", highResURL.MediaName)
 			updatedURLs = append(updatedURLs, highResURL)
 
-			err = mediaData.EncodeHighRes(ctx, baseImagePath)
+			if media_type.IsGPX(photo.Path) {
+				// A missing map may be rebuilt by a newer renderer at a new size.
+				_, err = generateSaveHighResJPEG(ctx.GetDB(), photo, mediaData, highResURL.MediaName, baseImagePath, highResURL)
+			} else {
+				err = mediaData.EncodeHighRes(ctx, baseImagePath)
+			}
 			if err != nil {
 				return []*models.MediaURL{}, errors.Wrap(err, "creating high-res cached image")
 			}
