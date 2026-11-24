@@ -1,3 +1,4 @@
+import { downloadFilename } from '../../helpers/downloadFilename'
 import { gql, useLazyQuery } from '@apollo/client'
 import { useTranslation } from 'react-i18next'
 import { NotificationType } from '../../__generated__/globalTypes'
@@ -56,10 +57,8 @@ const formatBytes = (t: TranslationFn) => (bytes: number) => {
 }
 
 const downloadMedia = (t: TranslationFn) => async (url: string) => {
-  const imgUrl = new URL(
-    `${import.meta.env.BASE_URL}${url}`.replace(/\/\//g, '/'),
-    location.origin
-  )
+  // API URLs already include their deployment path, as in the media viewer.
+  const imgUrl = new URL(url, location.origin)
 
   if (authToken() == null) {
     // Get share token if not authorized
@@ -85,14 +84,10 @@ const downloadMedia = (t: TranslationFn) => async (url: string) => {
     return
   }
 
-  const filenameMatch = url.match(/[^/]*$/)
-
-  if (filenameMatch == null) {
-    console.error('Could not extract filename', url)
-    return
-  }
-
-  const filename = filenameMatch[0]
+  const filename = downloadFilename(
+    response.headers.get('Content-Disposition'),
+    url
+  )
   downloadBlob(blob, filename)
 }
 

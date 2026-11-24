@@ -5,6 +5,7 @@ go 1.27.0
 require (
 	github.com/99designs/gqlgen v0.17.98
 	github.com/Kagami/go-face v0.0.0-20210630145111-0c14797b4d0e
+	github.com/bartventer/httpcache v0.14.0
 	github.com/buckket/go-blurhash v1.1.0
 	github.com/coder/websocket v1.8.15
 	github.com/go-sql-driver/mysql v1.10.1
@@ -19,6 +20,7 @@ require (
 	github.com/vektah/gqlparser/v2 v2.5.64
 	github.com/wsxiaoys/terminal v0.0.0-20160513160801-0940f3fc43a0
 	golang.org/x/crypto v0.58.0
+	golang.org/x/image v0.38.0
 	golang.org/x/text v0.43.0
 	gopkg.in/gographics/imagick.v3 v3.7.3
 	gopkg.in/vansante/go-ffprobe.v2 v2.3.1

@@ -208,3 +208,26 @@ func TestMediaQueryRejectsMediaTokenAfterMediaDeletion(t *testing.T) {
 	assert.EqualError(t, err, "share not found")
 	assert.Nil(t, media)
 }
+
+// GPX uses the existing photo model and must retain the same GraphQL access rules.
+func TestGPXMediaAuthorization(t *testing.T) {
+	fixtures := setupMediaTokenFixtures(t)
+	db := fixtures.resolver.DB(context.Background())
+	fixtures.media.Path = "/photos/shared/track.gpx"
+	fixtures.media.Type = models.MediaTypePhoto
+	require.NoError(t, db.Save(fixtures.media).Error)
+	require.NoError(t, db.Model(&models.MediaURL{}).Where("media_id = ?", fixtures.media.ID).Update("content_type", "application/gpx+xml").Error)
+	ownerContext := auth.AddUserToContext(context.Background(), fixtures.user)
+	media, err := fixtures.resolver.Media(ownerContext, fixtures.media.ID, nil)
+	require.NoError(t, err)
+	require.Equal(t, fixtures.media.ID, media.ID)
+	_, err = fixtures.resolver.Media(auth.AddUserToContext(context.Background(), fixtures.otherPerson), fixtures.media.ID, nil)
+	require.Error(t, err)
+	_, err = fixtures.resolver.Media(context.Background(), fixtures.media.ID, nil)
+	require.Error(t, err)
+	media, err = fixtures.resolver.Media(context.Background(), fixtures.media.ID, tokenCredentials(fixtures.mediaToken))
+	require.NoError(t, err)
+	require.Equal(t, fixtures.media.ID, media.ID)
+	_, err = fixtures.resolver.Media(context.Background(), fixtures.media.ID, tokenCredentials(fixtures.otherToken))
+	require.Error(t, err)
+}

@@ -153,6 +153,7 @@ RUN find /app/ui/assets -type f \( -name "*.js" -o -name "*.mjs" \) \
     done' sh {} +
 
 COPY --from=api /app/api/photoview /app/photoview
+COPY THIRD_PARTY_NOTICES.txt /app/THIRD_PARTY_NOTICES.txt
 
 WORKDIR /home/photoview
 
